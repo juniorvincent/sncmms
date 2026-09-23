@@ -237,3 +237,117 @@ function has_resolution_comment(mysqli $conn, int $ticket_id): bool {
     $stmt->close();
     return (bool) $found;
 }
+
+/** Problem reference number, e.g. P001, P002... */
+function generate_problem_reference(int $problem_id): string {
+    return 'P' . str_pad((string) $problem_id, 3, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Create a notification for a user (shown via the 🔔 icon).
+ */
+function notify_user(mysqli $conn, int $user_id, string $message, ?string $link = null): void {
+    $stmt = $conn->prepare("INSERT INTO notifications (user_id, message, link) VALUES (?, ?, ?)");
+    $stmt->bind_param('iss', $user_id, $message, $link);
+    $stmt->execute();
+    $stmt->close();
+}
+
+/** Unread notification count for the navbar badge. */
+function unread_notification_count(mysqli $conn, int $user_id): int {
+    $stmt = $conn->prepare("SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->bind_param('i', $user_id);
+    $stmt->execute();
+    return (int) $stmt->get_result()->fetch_assoc()['c'];
+}
+
+/**
+ * Check for tickets that have just breached their SLA and notify
+ * every Admin once each (flagged via sla_breach_notified so this
+ * doesn't re-fire every time the dashboard loads). Since this
+ * project has no cron/background job, this is called opportunistically
+ * whenever an Admin loads the dashboard — acceptable for a university
+ * project, though a real deployment would use a scheduled task instead.
+ */
+function check_and_notify_sla_breaches(mysqli $conn): void {
+    $result = $conn->query("
+        SELECT id, reference_no FROM tickets
+        WHERE sla_due_at IS NOT NULL
+          AND sla_due_at < NOW()
+          AND status NOT IN ('resolved','closed')
+          AND sla_breach_notified = 0
+    ");
+    if (!$result || $result->num_rows === 0) {
+        return;
+    }
+    $admins = $conn->query("SELECT id FROM users WHERE role = 'admin'")->fetch_all(MYSQLI_ASSOC);
+
+    while ($ticket = $result->fetch_assoc()) {
+        $ref = $ticket['reference_no'] ?? ('#' . $ticket['id']);
+        foreach ($admins as $admin) {
+            notify_user($conn, (int) $admin['id'], "Ticket $ref has exceeded its SLA.", "/sncmms/tickets/update.php?id=" . $ticket['id']);
+        }
+        $stmt = $conn->prepare("UPDATE tickets SET sla_breach_notified = 1 WHERE id = ?");
+        $stmt->bind_param('i', $ticket['id']);
+        $stmt->execute();
+        $stmt->close();
+    }
+}
+
+/**
+ * Handle a single uploaded file attachment for a ticket.
+ * Validates extension + size, stores it under a random filename
+ * (never the original name, to avoid path traversal / overwrite
+ * tricks), and records it in the attachments table.
+ *
+ * @param mysqli $conn
+ * @param int $ticket_id
+ * @param int $user_id
+ * @param array $file  one entry from $_FILES, e.g. $_FILES['attachment']
+ * @return string|null  an error message, or null on success (including "no file selected")
+ */
+function handle_ticket_attachment_upload(mysqli $conn, int $ticket_id, int $user_id, array $file): ?string {
+    if (!isset($file['error']) || $file['error'] === UPLOAD_ERR_NO_FILE) {
+        return null; // nothing selected — not an error
+    }
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        return 'Upload failed (error code ' . $file['error'] . ').';
+    }
+
+    $max_bytes = 5 * 1024 * 1024; // 5MB
+    if ($file['size'] > $max_bytes) {
+        return 'File is too large (max 5MB).';
+    }
+
+    $allowed_ext = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'txt'];
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    if (!in_array($ext, $allowed_ext, true)) {
+        return 'File type not allowed. Allowed: ' . implode(', ', $allowed_ext) . '.';
+    }
+
+    $upload_dir = __DIR__ . '/../uploads/';
+    $stored_name = bin2hex(random_bytes(16)) . '.' . $ext; // never trust/reuse the original filename on disk
+
+    if (!move_uploaded_file($file['tmp_name'], $upload_dir . $stored_name)) {
+        return 'Could not save the uploaded file.';
+    }
+
+    $stmt = $conn->prepare("INSERT INTO attachments (ticket_id, uploaded_by, original_name, stored_name, file_size) VALUES (?, ?, ?, ?, ?)");
+    $stmt->bind_param('iissi', $ticket_id, $user_id, $file['name'], $stored_name, $file['size']);
+    $stmt->execute();
+    $stmt->close();
+
+    return null;
+}
+
+/** All attachments for a ticket, newest first. */
+function get_ticket_attachments(mysqli $conn, int $ticket_id): array {
+    $stmt = $conn->prepare("
+        SELECT a.id, a.original_name, a.stored_name, a.file_size, a.uploaded_at, u.name AS uploader_name
+        FROM attachments a JOIN users u ON u.id = a.uploaded_by
+        WHERE a.ticket_id = ? ORDER BY a.uploaded_at DESC
+    ");
+    $stmt->bind_param('i', $ticket_id);
+    $stmt->execute();
+    return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+}

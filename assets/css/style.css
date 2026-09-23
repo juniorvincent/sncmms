@@ -299,3 +299,12 @@ table.data-table th { color: var(--text-muted); font-weight: 600; font-size: 12p
 @media (max-width: 700px) {
     .fx-icon { display: none; } /* keep small screens clean */
 }
+
+/* ---------- Print / Save-as-PDF ---------- */
+@media print {
+    .sidebar, .topheader, .btn-add, .btn-primary, .lang-switch, form, .no-print { display: none !important; }
+    .main-area { margin: 0 !important; }
+    .page-content { padding: 0 !important; }
+    body { background: #fff !important; }
+    .panel { border: 1px solid #ccc !important; box-shadow: none !important; page-break-inside: avoid; }
+}

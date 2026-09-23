@@ -27,37 +27,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_ticket'])) {
     $stmt->execute();
     $stmt->close();
 
+    $stmt = $conn->prepare("SELECT reference_no, reported_by FROM tickets WHERE id = ?");
+    $stmt->bind_param('i', $ticket_id);
+    $stmt->execute();
+    $t_row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    $ref = $t_row['reference_no'] ?? ('#' . $ticket_id);
+
+    notify_user($conn, $technician_id, "New ticket $ref has been assigned to you.", "/sncmms/tickets/update.php?id=$ticket_id");
+    notify_user($conn, (int) $t_row['reported_by'], "Your ticket $ref has been assigned to a technician.", "/sncmms/tickets/view.php?id=$ticket_id");
+
     $message = t('ticket') . " #$ticket_id " . t('ticket_assigned');
 }
 
+// --- Filters (status, priority, category, technician) ---
+$f_status = $_GET['f_status'] ?? '';
+$f_priority = $_GET['f_priority'] ?? '';
+$f_category = $_GET['f_category'] ?? '';
+$f_technician = (int) ($_GET['f_technician'] ?? 0);
+
+$filter_sql = '';
+$filter_types = '';
+$filter_params = [];
+if ($f_status !== '') { $filter_sql .= ' AND t.status = ?'; $filter_types .= 's'; $filter_params[] = $f_status; }
+if ($f_priority !== '') { $filter_sql .= ' AND t.priority = ?'; $filter_types .= 's'; $filter_params[] = $f_priority; }
+if ($f_category !== '') { $filter_sql .= ' AND t.category = ?'; $filter_types .= 's'; $filter_params[] = $f_category; }
+if ($f_technician > 0) { $filter_sql .= ' AND t.assigned_to = ?'; $filter_types .= 'i'; $filter_params[] = $f_technician; }
+
 // --- Role-based ticket visibility ---
 if ($role === 'user') {
-    $stmt = $conn->prepare("
+    $sql = "
         SELECT t.*, a.name AS asset_name, u.name AS assigned_name
         FROM tickets t JOIN assets a ON a.id = t.asset_id
         LEFT JOIN users u ON u.id = t.assigned_to
-        WHERE t.reported_by = ? ORDER BY t.created_at DESC
-    ");
-    $stmt->bind_param('i', $_SESSION['user_id']);
+        WHERE t.reported_by = ?" . $filter_sql . "
+        ORDER BY t.created_at DESC
+    ";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param('i' . $filter_types, $_SESSION['user_id'], ...$filter_params);
     $stmt->execute();
     $tickets = $stmt->get_result();
 } elseif ($role === 'technician') {
-    $stmt = $conn->prepare("
+    $sql = "
         SELECT t.*, a.name AS asset_name, u.name AS assigned_name
         FROM tickets t JOIN assets a ON a.id = t.asset_id
         LEFT JOIN users u ON u.id = t.assigned_to
-        WHERE t.assigned_to = ? ORDER BY t.created_at DESC
-    ");
-    $stmt->bind_param('i', $_SESSION['user_id']);
+        WHERE t.assigned_to = ?" . $filter_sql . "
+        ORDER BY t.created_at DESC
+    ";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param('i' . $filter_types, $_SESSION['user_id'], ...$filter_params);
     $stmt->execute();
     $tickets = $stmt->get_result();
 } else { // admin sees all
-    $tickets = $conn->query("
+    $sql = "
         SELECT t.*, a.name AS asset_name, u.name AS assigned_name
         FROM tickets t JOIN assets a ON a.id = t.asset_id
         LEFT JOIN users u ON u.id = t.assigned_to
+        WHERE 1=1" . $filter_sql . "
         ORDER BY t.created_at DESC
-    ");
+    ";
+    if ($filter_types !== '') {
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param($filter_types, ...$filter_params);
+        $stmt->execute();
+        $tickets = $stmt->get_result();
+    } else {
+        $tickets = $conn->query($sql);
+    }
 }
 
 $technicians = ($role === 'admin')
@@ -84,6 +121,53 @@ include __DIR__ . '/../includes/header.php';
 <div style="margin-bottom:16px;">
     <a href="create.php" class="btn-add"><?php echo t('new_ticket'); ?></a>
 </div>
+
+<form method="GET" class="panel no-print" style="margin-bottom:16px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+    <div>
+        <label style="display:block; font-size:11px; color:#64748B; margin-bottom:4px;"><?php echo t('status'); ?></label>
+        <select name="f_status" style="padding:8px; border:1px solid #E2E8F0; border-radius:5px; font-size:13px;">
+            <option value=""><?php echo t('all_statuses'); ?></option>
+            <?php foreach (['open','pending','in_progress','resolved','closed'] as $s): ?>
+                <option value="<?php echo $s; ?>" <?php echo $f_status === $s ? 'selected' : ''; ?>><?php echo t('status_' . $s); ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div>
+        <label style="display:block; font-size:11px; color:#64748B; margin-bottom:4px;"><?php echo t('priority'); ?></label>
+        <select name="f_priority" style="padding:8px; border:1px solid #E2E8F0; border-radius:5px; font-size:13px;">
+            <option value=""><?php echo t('all_priorities'); ?></option>
+            <?php foreach (['critical','high','medium','low'] as $p): ?>
+                <option value="<?php echo $p; ?>" <?php echo $f_priority === $p ? 'selected' : ''; ?>><?php echo t('priority_' . $p); ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div>
+        <label style="display:block; font-size:11px; color:#64748B; margin-bottom:4px;"><?php echo t('category'); ?></label>
+        <select name="f_category" style="padding:8px; border:1px solid #E2E8F0; border-radius:5px; font-size:13px;">
+            <option value=""><?php echo t('all_categories'); ?></option>
+            <?php foreach (ticket_categories() as $cat): ?>
+                <option value="<?php echo htmlspecialchars($cat); ?>" <?php echo $f_category === $cat ? 'selected' : ''; ?>><?php echo htmlspecialchars(category_label($cat)); ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <?php if ($role === 'admin'): ?>
+    <div>
+        <label style="display:block; font-size:11px; color:#64748B; margin-bottom:4px;"><?php echo t('nav_users'); ?></label>
+        <select name="f_technician" style="padding:8px; border:1px solid #E2E8F0; border-radius:5px; font-size:13px;">
+            <option value="0"><?php echo t('all_technicians'); ?></option>
+            <?php
+            $tech_filter_list = $conn->query("SELECT id, name FROM users WHERE role = 'technician' ORDER BY name");
+            while ($tf = $tech_filter_list->fetch_assoc()): ?>
+                <option value="<?php echo $tf['id']; ?>" <?php echo $f_technician === (int) $tf['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($tf['name']); ?></option>
+            <?php endwhile; ?>
+        </select>
+    </div>
+    <?php endif; ?>
+    <button type="submit" class="btn-add" style="padding:8px 16px; font-size:13px;"><?php echo t('filter'); ?></button>
+    <?php if ($f_status || $f_priority || $f_category || $f_technician): ?>
+        <a href="list.php" style="font-size:12px; color:#64748B; padding:8px 0;"><?php echo t('clear_filters'); ?></a>
+    <?php endif; ?>
+</form>
 
 <div class="panel">
     <table class="data-table">

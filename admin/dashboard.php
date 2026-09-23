@@ -2,9 +2,15 @@
 require_once __DIR__ . '/../config/db.php';
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../includes/lang.php';
+require_once __DIR__ . '/../includes/smart_rules.php';
 
 // Any logged-in role can view the dashboard (Admin, Technician, User)
 require_login();
+
+// Opportunistic SLA-breach check (no cron in this project — see smart_rules.php)
+if (current_role() === 'admin') {
+    check_and_notify_sla_breaches($conn);
+}
 
 // --- Summary counts ---
 $total_assets   = $conn->query("SELECT COUNT(*) AS c FROM assets")->fetch_assoc()['c'];

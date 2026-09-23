@@ -63,6 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_feedback'])) {
 // complete ticket history" — showing the full thread, not just the
 // resolution one, is the more transparent reading of that.
 $comments = get_ticket_comments($conn, $ticket_id);
+$attachments = get_ticket_attachments($conn, $ticket_id);
 
 $stmt = $conn->prepare("
     SELECT h.change_note, h.changed_at, u.name
@@ -101,6 +102,21 @@ include __DIR__ . '/../includes/header.php';
             <?php endif; ?>
         <?php endif; ?>
     </p>
+</div>
+
+<!-- Attachments -->
+<div class="panel" style="max-width:640px; margin-bottom:20px;">
+    <h2><?php echo t('attachments'); ?></h2>
+    <?php if (empty($attachments)): ?>
+        <p style="font-size:13px; color:#64748B;"><?php echo t('no_attachments'); ?></p>
+    <?php else: ?>
+        <?php foreach ($attachments as $a): ?>
+            <p style="font-size:13px; padding:6px 0; border-bottom:1px solid #E2E8F0;">
+                📎 <a href="download_attachment.php?id=<?php echo $a['id']; ?>" style="color:#2563EB;"><?php echo htmlspecialchars($a['original_name']); ?></a>
+                <span style="color:#94A3B8; font-size:11px;">(<?php echo round($a['file_size']/1024); ?> KB)</span>
+            </p>
+        <?php endforeach; ?>
+    <?php endif; ?>
 </div>
 
 <!-- Resolution comment(s) + full troubleshooting thread, read-only -->

@@ -59,6 +59,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
             add_ticket_comment($conn, $ticket_id, (int) current_user_id(), $comment_text, $mark_as_resolution);
         }
 
+        if (!empty($_FILES['attachment']['name'])) {
+            handle_ticket_attachment_upload($conn, $ticket_id, (int) current_user_id(), $_FILES['attachment']);
+        }
+
+        if (in_array($new_status, ['resolved', 'closed'], true) && !in_array($ticket['status'], ['resolved', 'closed'], true)) {
+            $ref = $ticket['reference_no'] ?? ('#' . $ticket_id);
+            notify_user($conn, (int) $ticket['reported_by'], "Your ticket $ref has been resolved. Please rate the resolution.", "/sncmms/tickets/view.php?id=$ticket_id");
+        }
+
         $message = t('status_updated');
         $ticket['status'] = $new_status;
     }
@@ -74,6 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_comment_only'])) 
 }
 
 $comments = get_ticket_comments($conn, $ticket_id);
+$attachments = get_ticket_attachments($conn, $ticket_id);
 
 // --- History log ---
 $stmt = $conn->prepare("
@@ -129,7 +139,7 @@ include __DIR__ . '/../includes/header.php';
     <?php endif; ?>
 
     <!-- Status change + optional resolution comment in one action -->
-    <form method="POST" id="statusForm">
+    <form method="POST" id="statusForm" enctype="multipart/form-data">
         <input type="hidden" name="update_status" value="1">
         <input type="hidden" name="ticket_id" value="<?php echo $ticket['id']; ?>">
         <div class="form-group">
@@ -155,8 +165,28 @@ include __DIR__ . '/../includes/header.php';
             <label for="markRes" style="margin:0; font-size:13px;"><?php echo t('mark_as_resolution_comment'); ?></label>
         </div>
 
+        <div class="form-group">
+            <label><?php echo t('attachment'); ?> <span style="font-weight:400; color:#94A3B8;">(<?php echo t('optional'); ?>)</span></label>
+            <input type="file" name="attachment" accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.txt">
+        </div>
+
         <button type="submit" class="btn-primary" style="width:auto; padding:10px 24px;"><?php echo t('save'); ?></button>
     </form>
+</div>
+
+<!-- Attachments -->
+<div class="panel" style="max-width:640px; margin-bottom:20px;">
+    <h2><?php echo t('attachments'); ?></h2>
+    <?php if (empty($attachments)): ?>
+        <p style="font-size:13px; color:#64748B;"><?php echo t('no_attachments'); ?></p>
+    <?php else: ?>
+        <?php foreach ($attachments as $a): ?>
+            <p style="font-size:13px; padding:6px 0; border-bottom:1px solid #E2E8F0;">
+                📎 <a href="download_attachment.php?id=<?php echo $a['id']; ?>" style="color:#2563EB;"><?php echo htmlspecialchars($a['original_name']); ?></a>
+                <span style="color:#94A3B8; font-size:11px;">(<?php echo round($a['file_size']/1024); ?> KB — <?php echo htmlspecialchars($a['uploader_name']); ?>, <?php echo date('d/m/Y', strtotime($a['uploaded_at'])); ?>)</span>
+            </p>
+        <?php endforeach; ?>
+    <?php endif; ?>
 </div>
 
 <!-- Comment thread -->

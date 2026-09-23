@@ -72,6 +72,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute();
             $stmt->close();
 
+            if ($technician_id) {
+                notify_user($conn, $technician_id, "New ticket $reference_no has been assigned to you.", "/sncmms/tickets/update.php?id=" . $ticket_id);
+            }
+
+            if (!empty($_FILES['attachment']['name'])) {
+                handle_ticket_attachment_upload($conn, $ticket_id, (int) $_SESSION['user_id'], $_FILES['attachment']);
+                // Upload errors are non-fatal here — the ticket itself was created successfully;
+                // we don't want a bad attachment to block the whole submission.
+            }
+
             header('Location: list.php?created=' . $ticket_id . '&ref=' . urlencode($reference_no));
             exit;
         }
@@ -107,8 +117,12 @@ include __DIR__ . '/../includes/header.php';
     </div>
 <?php endif; ?>
 
+<p style="margin-bottom:14px; font-size:13px;">
+    💡 <?php echo t('kb_suggestion_text'); ?> <a href="/sncmms/knowledge_base/list.php" style="color:#2563EB; font-weight:600;"><?php echo t('kb_suggestion_link'); ?></a>
+</p>
+
 <div class="panel" style="max-width:600px;">
-    <form method="POST">
+    <form method="POST" enctype="multipart/form-data">
         <div class="form-group">
             <label><?php echo t('ticket_title'); ?></label>
             <input type="text" name="title" required maxlength="150" placeholder="<?php echo t('ticket_title_placeholder'); ?>" value="<?php echo htmlspecialchars($_POST['title'] ?? ''); ?>" style="width:100%; padding:10px; border:1px solid #E2E8F0; border-radius:5px;">
@@ -156,6 +170,11 @@ include __DIR__ . '/../includes/header.php';
                 <option value="critical"><?php echo t('priority_critical'); ?></option>
             </select>
         </div>
+        <div class="form-group">
+            <label><?php echo t('attachment'); ?> <span style="font-weight:400; color:#94A3B8;">(<?php echo t('optional'); ?>, <?php echo t('attachment_hint'); ?>)</span></label>
+            <input type="file" name="attachment" accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.txt">
+        </div>
+
         <button type="submit" class="btn-primary" style="width:auto; padding:11px 26px;"><?php echo t('submit'); ?></button>
     </form>
 </div>

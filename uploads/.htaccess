@@ -1,0 +1,6 @@
+# Prevent any script execution in the uploads folder — uploaded files
+# must never be treated as PHP, no matter what extension trickery is used.
+php_flag engine off
+<FilesMatch "\.(php|phtml|php3|php4|php5|phar)$">
+    Require all denied
+</FilesMatch>
